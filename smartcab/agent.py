@@ -9,7 +9,7 @@ from simulator import Simulator
 
 class LearningAgent(Agent):
     """An agent that learns to drive in the smartcab world."""
-
+    
     def __init__(self, env):
         super(LearningAgent, self).__init__(env)  # sets self.env = env, state = None, next_waypoint = None, and a default color
         self.color = 'red'  # override color
@@ -20,33 +20,31 @@ class LearningAgent(Agent):
         self.last_state = None
         self.last_action = None
         self.last_reward = None
-
+        
+        # Report number of visits in a state
+        self.negative_rewards = list()
+        self.n_trial = 0
+        
     def reset(self, destination=None):
         self.planner.route_to(destination)
         # Prepare for a new trip; reset any variables here, if required
         self.last_state = None
         self.last_action = None
         self.last_reward = None
+        self.n_trial += 1
         
-    def set_q_params(self, alpha, epsilon, gamma):
+    def set_q_params(self, alpha, epsilon, gamma, default_q_value=0):
         # self.q_mapping = {}
-        self.q_mapping = defaultdict(int)
+        # Set default_q_value for 10 for optimistic learner
+        self.q_mapping = defaultdict(lambda: default_q_value)
         self.alpha_function = alpha
         self.epsilon_function = epsilon
         self.gamma_function = gamma
-        
+         
     def get_q_state(self, inputs):
         '''Returns the state for the Q-learning algorithm.'''
-        left, oncoming, right = True, True, True
-        
-        if inputs['light'] == 'red' and inputs['left'] == 'forward':
-            right = False
-        if inputs['light'] == 'red':
-            oncoming = False
-        if inputs['light'] == 'red' or (inputs['oncoming'] == 'forward' or inputs['oncoming'] == 'right'):
-            left = False
-        return (left, oncoming, right, self.next_waypoint)
-        
+        return (inputs['light'], inputs['left'], inputs['oncoming'], self.next_waypoint)
+    
     def max_q_action(self):
         '''Returns the policy and the utility related to the smartcab state'''
         q_action = None
@@ -77,16 +75,13 @@ class LearningAgent(Agent):
         self.state = self.get_q_state(inputs)
         
         # Select action according to your policy
-        # Exploit the information learned so far using Q-function 
-        action, max_q_value = self.max_q_action()
-        
         # Explore different actions with epsilon probabily
         if random.uniform(0, 1) <= epsilon:
-            random_action = action     
-            while random_action == action:
-                random_action = self.actions[random.randint(0, len(self.actions) -1)]
-            action = random_action
+            action = random.choice(self.actions)
             max_q_value = self.q_mapping[self.state, action]
+        else:
+            # Exploit the information learned so far using Q-function 
+            action, max_q_value = self.max_q_action()
 
         # Execute action and get reward
         reward = self.env.act(self, action)
@@ -101,9 +96,19 @@ class LearningAgent(Agent):
         self.last_state = self.state
         self.last_action = action
         self.last_reward = reward
+        
+        # Register negative rewards
+        if reward < 0:
+            while self.n_trial > len(self.negative_rewards):
+                self.negative_rewards.append(list())
+            self.negative_rewards[self.n_trial -1].append(reward)
 
        # print "LearningAgent.update(): deadline = {}, inputs = {}, action = {}, reward = {}, next_waypoint: {}, time: {}".format(deadline, inputs, action, reward, self.next_waypoint, t)  # [debug]
-
+        
+    def report_q_learning(self, trials=100):
+        # Print the last 'trials' negative rewards
+        for n_trial, reward_list in enumerate(self.negative_rewards[-trials:]):
+            print 'Trial {} - list: {}, length: {}, sum: {}'.format(len(self.negative_rewards) -trials + n_trial, reward_list, len(reward_list), sum(reward_list))
 
 def run():
     """Run the agent for a finite number of trials."""
@@ -136,21 +141,28 @@ def run():
         a.set_q_params(
             alpha_functions.rational_alpha, 
             epsilon_functions.low_constant_epsilon, 
-            gamma_functions.low_exponential_gamma)
+            gamma_functions.med_exponential_gamma)
         # Now simulate it
         sim = Simulator(e, update_delay=args.delay, display=not args.no_display)  # create simulator, uses pygame when display=True (default), if available
         # NOTE: To speed up simulation, reduce update_delay and/or set display=False
 
         sim.run(n_trials=args.trials)  # run for a specified number of trials
+        a.report_q_learning(trials=100)          # report q learning results
         # NOTE: To quit midway, press Esc or close pygame window, or hit Ctrl+C on the command-line
     else:
+        # Iterate through the alpha functions
         for alpha_name in dir(alpha_functions):
+            # Skip what is not an alpha function
             if alpha_name.startswith('__') or not callable(getattr(alpha_functions, alpha_name)): 
                 continue
+            # Iterate through the epsilon functions
             for epsilon_name in dir(epsilon_functions):
+                # Skip what is not an epsilon function
                 if epsilon_name.startswith('__') or not callable(getattr(epsilon_functions, epsilon_name)): 
                     continue
+                # Iterate through the gamma functions
                 for gamma_name in dir(gamma_functions):
+                    # Skip what is not an gamma function
                     if gamma_name.startswith('__') or not callable(getattr(gamma_functions, gamma_name)): 
                         continue
                         
@@ -158,7 +170,7 @@ def run():
                     # Set functions (alpha, epsilon, gamma) to the underlying variables
                     a.set_q_params(
                         getattr(alpha_functions, alpha_name), 
-                        getattr(epsilon_functions, epsilon_name), 
+                        getattr(epsilon_functions, epsilon_name),
                         getattr(gamma_functions, gamma_name))
 
                     # Now simulate it 
@@ -166,6 +178,7 @@ def run():
                     # NOTE: To speed up simulation, reduce update_delay and/or set display=False
 
                     sim.run(n_trials=args.trials)  # run for a specified number of trials
+                    a.report_q_learning()          # report q learning results
                     # NOTE: To quit midway, press Esc or close pygame window, or hit Ctrl+C on the command-line
 
 
